@@ -1,0 +1,121 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import astropy.units as u
+import pandas as pd
+from scipy.signal import find_peaks
+from scipy.stats import norm, cauchy
+from scipy.optimize import minimize
+
+# Set plot configuration for nicer visualization
+plt.rcParams['xtick.minor.visible'], plt.rcParams['xtick.top'] = True, True
+plt.rcParams['ytick.minor.visible'], plt.rcParams['ytick.right'] = True, True
+plt.rcParams['xtick.direction'], plt.rcParams['ytick.direction'] = 'in', 'in'
+plt.rcParams["font.family"] = "Times New Roman"
+plt.rcParams["text.usetex"] = False
+plt.rcParams["text.latex.preamble"] = r"\usepackage{txfonts}"
+plt.rcParams['font.size'] = 14
+
+# Importing data from a text file
+data = pd.read_csv('P3data02.txt', skiprows=(3), header=None, delim_whitespace=True)
+data = data.to_numpy()
+flux = data[:, 0] 
+loglam = data[:, 1] 
+ivar = data[:, 2]
+wavelength = 10 ** loglam
+
+# Plotting the data
+plt.plot(wavelength, flux, linewidth=0.5, c='k')
+plt.autoscale(enable=True, axis='x', tight=True)
+plt.xlabel('Wavelength [Å]')
+plt.ylabel('Flux [$10^{-17}$ erg/cm$^2$/s/Å]')
+plt.savefig('check.png')
+
+# Masking the data to focus on a specific wavelength range
+mask = (wavelength > 5500) & (wavelength < 6500)
+flux_i = flux[mask]
+wave_i = wavelength[mask]
+ivar_i = ivar[mask]
+peak = find_peaks(flux_i, prominence=10, width=10)[0]
+
+# Defining functions for Gaussian and Cauchy distributions
+def gauss(x):
+    return 1 / (np.sqrt(2 * np.pi)) * np.exp(-1 / 2 * x ** 2)
+
+def cauchy(i):
+    return (1 / np.pi) * 1 / (1 + i ** 2)
+
+# Defining the model function using the Gaussian and Cauchy distributions
+def func(wave_i, theta):
+    return theta[0] + theta[1] * (wave_i - wave_ref) + theta[2] * gauss((wave_i - theta[3]) / theta[4])
+
+def func_c(wave_i, theta):
+    return theta[0] + theta[1] * (wave_i - wave_ref) + theta[2] * cauchy((wave_i - theta[3]) / theta[4])
+
+# Defining the chi-squared function for Gaussian and Cauchy distributions
+def chi2(theta, flux_i, dist):
+    return np.sum(ivar_i * (flux_i - dist(wave_i, theta)) ** 2)
+
+# Initial guess for the parameters of the model
+theta_initial = np.array([10, 0, 1, 6100, 2])
+
+# Minimize chi-squared to obtain the best-fit parameters
+res = minimize(chi2, theta_initial, args=(flux_i, func))
+res_c = minimize(chi2, theta_initial, args=(flux_i, func_c))
+theta_res = res['x']
+theta_res_c = res_c['x']
+
+# Calculate chi-squared per degree of freedom for Gaussian and Cauchy distributions
+chi2dof = res['fun'] / (len(flux_i) - 5)
+print(f"Chi2_dof: {chi2dof:.3f}")
+chi2dof_c = res_c['fun'] / (len(flux_i) - 5)
+print(f"Chi2_dof_c: {chi2dof_c:.3f}")
+
+# Plot the model fit for Gaussian and Cauchy distributions
+model = func(wavelength, theta_res)
+model_i = func(wave_i, theta_res)
+plt.plot(wavelength, model, linewidth=1.8, c='b')
+plt.xlim([5500, 6750])
+
+model_c = func_c(wavelength, theta_res_c)
+model_i_c = func_c(wave_i, theta_res_c)
+plt.plot(wavelength, model_c, linewidth=1.8, c='r')
+plt.xlim([5500, 6750])
+
+plt.legend(['Data', 'Gaussian', 'Cauchy'])
+plt.ylim(5, 22)
+plt.savefig('main.png')
+plt.show()
+
+# Calculate residuals for Gaussian and Cauchy distributions
+residual = flux_i - model_i
+residual_c = flux_i - model_i_c
+plt.figure(figsize=(12, 5))
+plt.plot(wave_i, residual, lw=0.5)
+plt.plot(wave_i, residual_c, lw=0.5)
+plt.axhline(y=0, c='k')
+plt.legend(['Gaussian', 'Cauchy'])
+plt.xlabel("Wavelength [$Å$]")
+plt.ylabel("$f_i - f(λ_i | θ)$ [$10^{-17}$ erg/cm$^2$/s/Å]")
+plt.savefig('uncert.png')
+
+# Calculate redshift and uncertainty for Gaussian distribution
+wave_lab = 2800.3
+redshift = (theta_res[3] - wave_lab) / wave_lab
+redshift_syn = np.zeros(100)
+var_i = 1 / np.sqrt(ivar_i)
+for i in range(100):
+    flux_syn = model_i + var_i * np.random.normal(size=len(var_i))
+    t_syn = minimize(chi2, theta_initial, args=(flux_syn, func))['x']
+    redshift_syn[i] = (t_syn[3] - wave_lab) / wave_lab
+uncertainty = np.std(redshift_syn, ddof=1)
+print(f"Redshift: {redshift:.7f} +- {uncertainty:.7f}")
+
+# Calculate redshift and uncertainty for Cauchy distribution
+redshift_c = (theta_res_c[3] - wave_lab) / wave_lab
+redshift_syn_c = np.zeros(100)
+for i in range(100):
+    flux_syn_c = model_i_c + var_i * np.random.normal(size=len(var_i))
+    t_syn_c = minimize(chi2, theta_initial, args=(flux_syn, func_c))['x']
+    redshift_syn_c[i] = (t_syn_c[3] - wave_lab) / wave_lab
+uncertainty_c = np.std(redshift_syn_c, ddof=1)
+print(f"Redshift_c: {redshift_c:.7f} +- {uncertainty_c:.7f}")
